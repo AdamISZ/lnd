@@ -17,6 +17,8 @@ import (
 	"syscall"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcutil"
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
 	"github.com/lightningnetwork/lnd/lnrpc"
@@ -235,6 +237,99 @@ func sendCoins(ctx *cli.Context) error {
 	}
 	txid, err := client.SendCoins(ctxb, req)
 	if err != nil {
+		return err
+	}
+
+	printRespJSON(txid)
+	return nil
+}
+
+var coinJoinCommand = cli.Command{
+	Name:      "coinjoin",
+	Category:  "On-chain",
+	Usage:     "Cosigns a coinjoin and optionally broadcasts",
+	ArgsUsage: "PSBT pubkey tweak",
+	Description: `
+	Take a partially signed Bitcoin transaction pre-decrypted by pubkey pubkey,
+	and co-sign inputs after checking that we own the destination defined
+	by pubkey and tweak. All three arguments should be provided in hex.
+	`,
+	Flags: []cli.Flag{
+		cli.StringFlag{
+			Name:  "PSBT",
+			Usage: "the full serialized transaction, in hex",
+		},
+		cli.StringFlag{
+			Name:  "pubkey",
+			Usage: "a compressed pubkey in hex (which is in our wallet)",
+		},
+		cli.StringFlag{
+			Name:  "tweak",
+			Usage: "a 64 char (32 byte) hex encoded tweak value",
+		},
+	},
+	Action: actionDecorator(coinJoin),
+}
+
+func coinJoin(ctx *cli.Context) error {
+	var (
+		PSBT   string
+		pubkey string
+		tweak  string
+		err    error
+	)
+	args := ctx.Args()
+
+	if ctx.NArg() == 0 && ctx.NumFlags() == 0 {
+		cli.ShowCommandHelp(ctx, "coinjoin")
+		return nil
+	}
+	fmt.Println("In coinJoin")
+	switch {
+	case ctx.IsSet("PSBT"):
+		PSBT = ctx.String("PSBT")
+	case args.Present():
+		PSBT = args.First()
+		args = args.Tail()
+	default:
+		return fmt.Errorf("PSBT argument missing")
+	}
+
+	switch {
+	case ctx.IsSet("pubkey"):
+		pubkey = ctx.String("pubkey")
+	case args.Present():
+		pubkey = args.First()
+		args = args.Tail()
+	default:
+		return fmt.Errorf("pubkey argument missing")
+	}
+
+	switch {
+	case ctx.IsSet("tweak"):
+		pubkey = ctx.String("tweak")
+	case args.Present():
+		tweak = args.First()
+	default:
+		return fmt.Errorf("tweak argument missing")
+	}
+	fmt.Println("Got tweak: ")
+	fmt.Println(tweak)
+	fmt.Println(pubkey)
+	fmt.Println(PSBT)
+	ctxb := context.Background()
+	client, cleanUp := getClient(ctx)
+	defer cleanUp()
+
+	req := &lnrpc.CoinJoinRequest{
+		Psbt:   PSBT,
+		Pubkey: pubkey,
+		Tweak:  tweak,
+	}
+	fmt.Println("Created request object")
+	txid, err := client.CoinJoin(ctxb, req)
+	if err != nil {
+		fmt.Println("Got err: " + err.Error())
 		return err
 	}
 

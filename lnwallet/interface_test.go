@@ -943,6 +943,162 @@ func testSingleFunderReservationWorkflow(miner *rpctest.Harness,
 	assertReservationDeleted(bobChanReservation, t)
 }
 
+// This tests a simple 2 party of coinjoin by first funding a utxo
+// for both of Bob and Alice, and then spending both into one
+// transaction. The purpose is to test construction and broadcast,
+// not sophisticated validation.
+func testCospend(r *rpctest.Harness,
+	alice, bob *lnwallet.LightningWallet, t *testing.T) {
+
+	// Start building the coinjoin transaction; we'll append
+	// inputs and outputs as we build
+	tx1 := wire.NewMsgTx(2)
+
+	// The (equal) amount we'll use for each input to the coinjoin
+	const fundingAmt = btcutil.SatoshiPerBitcoin
+
+	// We'll repeat the same actions for both wallets, so
+	// construct arrays of wallets
+	ws := []*lnwallet.LightningWallet{alice, bob}
+
+	// Some values must be stored for Alice and Bob for the next step
+	var outputValues []int64
+	var pubKeys []keychain.KeyDescriptor
+	var keyScripts [][]byte
+	var txs []*wire.MsgTx
+	var outputIndexes []uint32
+
+	// For each wallet: get an address, pay fundingAmt to it,
+	// then find its output index, then construct a TxIn paying
+	// from it, and append it to the coinjoin transaction.
+	for _, w := range ws[:] {
+		pubKey, err := w.DeriveNextKey(keychain.KeyFamilyMultiSig)
+		if err != nil {
+			t.Fatalf("unable to obtain pubkey: %v", err)
+		}
+		pubKeys = append(pubKeys, pubKey)
+		pubkeyHash := btcutil.Hash160(pubKey.PubKey.SerializeCompressed())
+		keyAddr, err := btcutil.NewAddressWitnessPubKeyHash(pubkeyHash,
+			&chaincfg.RegressionNetParams)
+		if err != nil {
+			t.Fatalf("unable to create addr: %v", err)
+		}
+		keyScript, err := txscript.PayToAddrScript(keyAddr)
+		if err != nil {
+			t.Fatalf("unable to generate script: %v", err)
+		}
+		keyScripts = append(keyScripts, keyScript)
+
+		// We plan to pay to the above script, for this step we can use
+		// the (badly named!) utility function "SendOutputs"
+		newOutput := &wire.TxOut{
+			Value:    fundingAmt,
+			PkScript: keyScript,
+		}
+		txid, err := w.SendOutputs([]*wire.TxOut{newOutput}, 10)
+		if err != nil {
+			t.Fatalf("unable to create output: %v", err)
+		}
+		err = waitForMempoolTx(r, txid)
+		if err != nil {
+			t.Fatalf("tx not relayed to miner: %v", err)
+		}
+		txr, err := r.Node.GetRawTransaction(txid)
+		if err != nil {
+			t.Fatalf("unable to query for tx: %v", err)
+		}
+		tx := txr.MsgTx()
+		txs = append(txs, tx)
+		//Need to identify the outpoint in tx, which is the
+		//one we want to spend
+		var outputIndex uint32
+		if len(tx.TxOut) == 1 || bytes.Equal(tx.TxOut[0].PkScript, keyScript) {
+			outputIndex = 0
+		} else {
+			outputIndex = 1
+		}
+		outputIndexes = append(outputIndexes, outputIndex)
+		outputValues = append(outputValues, tx.TxOut[outputIndex].Value)
+
+		tx1.AddTxIn(&wire.TxIn{
+			PreviousOutPoint: wire.OutPoint{
+				Hash:  tx.TxHash(),
+				Index: outputIndex,
+			},
+			Sequence: wire.MaxTxInSequenceNum,
+		})
+	}
+
+	//prepare destinations for the transaction
+	var destinationAddresses []btcutil.Address
+	for i, w := range ws[:] {
+		addr, err := w.NewAddress(lnwallet.WitnessPubKey, false)
+		if err != nil {
+			t.Fatalf("unable to create new address: %v", err)
+		}
+		destinationAddresses = append(destinationAddresses, addr)
+		//Find the script we're paying to (so it'll be output of tx1)
+		payToScript, err := txscript.PayToAddrScript(addr)
+		if err != nil {
+			t.Fatalf("unable to create output script: %v", err)
+		}
+		txFee := btcutil.Amount(0.001 * btcutil.SatoshiPerBitcoin)
+		tx1.AddTxOut(&wire.TxOut{
+			Value:    outputValues[i] - int64(txFee),
+			PkScript: payToScript,
+		})
+	}
+	for i, w := range ws[:] {
+		// Now we can populate the sign descriptor which we'll use to
+		// generate the signature.
+		signDesc := &lnwallet.SignDescriptor{
+			KeyDesc: keychain.KeyDescriptor{
+				PubKey: pubKeys[i].PubKey,
+			},
+			WitnessScript: keyScripts[i],
+			Output:        txs[i].TxOut[outputIndexes[i]],
+			HashType:      txscript.SigHashAll,
+			SigHashes:     txscript.NewTxSigHashes(tx1),
+			InputIndex:    i,
+		}
+		spendSig, err := w.Cfg.Signer.SignOutputRaw(tx1, signDesc)
+		if err != nil {
+			t.Fatalf("unable to generate signature on tx1: %v", err)
+		}
+
+		//Construct the witness for this input
+		witness := make([][]byte, 2)
+		witness[0] = append(spendSig, byte(txscript.SigHashAll))
+		witness[1] = pubKeys[i].PubKey.SerializeCompressed()
+		tx1.TxIn[i].Witness = witness
+
+		// Finally, attempt to validate the completed transaction. This
+		// should succeed if the wallet was able to properly generate
+		// the proper private key.
+		vm, err := txscript.NewEngine(keyScripts[i],
+			tx1, i, txscript.StandardVerifyFlags, nil,
+			nil, outputValues[i])
+		if err != nil {
+			t.Fatalf("unable to create engine: %v", err)
+		}
+		if err := vm.Execute(); err != nil {
+			t.Fatalf("spend is invalid: %v", err)
+		}
+	}
+
+	// Finally, check that we can broadcast the coinjoin:
+	if err := alice.PublishTransaction(tx1); err != nil {
+		t.Fatalf("unable to publish: %v", err)
+	}
+
+	// Mine the 3 transactions created here.
+	if _, err := r.Node.Generate(1); err != nil {
+		t.Fatalf("unable to generate block: %v", err)
+	}
+	t.Log(spew.Sdump(tx1))
+
+}
+
 func testListTransactionDetails(miner *rpctest.Harness,
 	alice, _ *lnwallet.LightningWallet, t *testing.T) {
 
@@ -1973,6 +2129,10 @@ type walletTestCase struct {
 }
 
 var walletTests = []walletTestCase{
+	{
+		name: "coinjoin",
+		test: testCospend,
+	},
 	{
 		name: "insane fee reject",
 		test: testReservationInitiatorBalanceBelowDustCancel,

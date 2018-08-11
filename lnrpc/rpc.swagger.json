@@ -895,6 +895,33 @@
         ]
       }
     },
+    "/v1/psbt": {
+      "post": {
+        "summary": "* lncli: `coinjoin`\nCoinJoin executes a request to co-sign an existing serialized but only\npartially signed transaction.\nThe server will sign each input that it recognizes it owns, assuming that\nit recognizes that it receives as many coins as it spends.\nThe server will optionally broadcast the transaction also.",
+        "operationId": "CoinJoin",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/lnrpcCoinJoinResponse"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/lnrpcCoinJoinRequest"
+            }
+          }
+        ],
+        "tags": [
+          "Lightning"
+        ]
+      }
+    },
     "/v1/switch": {
       "post": {
         "summary": "* lncli: `fwdinghistory`\nForwardingHistory allows the caller to query the htlcswitch for a record of\nall HTLC's forwarded within the target time range, and integer offset\nwithin that time range. If no time-range is specified, then the first chunk\nof the past 24 hrs of forwarding history are returned.",
@@ -1505,6 +1532,32 @@
           "items": {
             "$ref": "#/definitions/lnrpcChannelCloseSummary"
           }
+        }
+      }
+    },
+    "lnrpcCoinJoinRequest": {
+      "type": "object",
+      "properties": {
+        "psbt": {
+          "type": "string",
+          "title": "/ The partially signed bitcoin transaction serialized in hex"
+        },
+        "tweak": {
+          "type": "string",
+          "title": "/ The hexlified tweak to construct our destination"
+        },
+        "pubkey": {
+          "type": "string",
+          "title": "/ The pubkey used to construct our destination"
+        }
+      }
+    },
+    "lnrpcCoinJoinResponse": {
+      "type": "object",
+      "properties": {
+        "full_signed_tx": {
+          "type": "string",
+          "title": "/ The fully signed bitcoin transaction"
         }
       }
     },

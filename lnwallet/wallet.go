@@ -3,8 +3,10 @@ package lnwallet
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"math"
 	"net"
 	"sync"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
@@ -297,6 +300,217 @@ func NewLightningWallet(Cfg Config) (*LightningWallet, error) {
 		lockedOutPoints:  make(map[wire.OutPoint]struct{}),
 		quit:             make(chan struct{}),
 	}, nil
+}
+
+// CoinJoin accepts a PSBT, and additional pubkey information that allows
+// the wallet to reconstruct the destination address which it can control
+// (and import the key for), validate that the transaction is spending
+// an acceptable amount into, and then complete the signing of the
+// transaction. It returns a fully signed and validated transaction.
+//
+// This is a part of the WalletController interface.
+func (l *LightningWallet) CoinJoin(tx *wire.MsgTx, pubKey *btcec.PublicKey,
+	tweak []byte, activeNetParams *chaincfg.Params) ([]byte, error) {
+	// 1. First we must identify that we do indeed own the pubKey,
+	//     by scanning for it in our multisig branch/closechannelsummaries.
+	// 2. If found, we can calculated the expected destination addr,
+	//     by combing the privkey for the above pubkey with the tweak.
+	// 3. Next, we move on to scanning the proposed partially signed
+	//     transaction: first, is the expected destination address present?
+	//      If not, quit, else note the amount paid.
+	// 4. Second, check which inputs belong to us. If not, ignore. If so,
+	//     check the amounts paid. If total > total calculated in (3),
+	//     reject.
+	// 5. Last, if the above rules all pass, sign those inputs and return
+	//     the fully signed transaction.
+
+	// For now, there are problems with extracting keys from
+	// channel close summaries, see PR #1726.
+	// It also remains open whether close outputs, change outputs or others
+	// might be involved in CoinJoin.
+	// So we do this: grab all existing utxos owned by the wallet.
+	// If we know we possess the pubkey provided (by attempting to get its
+	// privkey from the wallet and checking for success),
+	// and inferring the tweakedkey->expectedDestAddr, we can simply inspect
+	// the proposed transaction and decide whether to sign it or not.
+
+	// Step 1
+	// Verify that the wallet owns the private key for pubKey
+	hash160 := btcutil.Hash160(pubKey.SerializeCompressed())
+	addr, err := btcutil.NewAddressWitnessPubKeyHash(hash160, activeNetParams)
+	if err != nil {
+		return nil, err
+	}
+	ourPrivKey, err := l.GetPrivKey(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	//Step 2
+	// Find the tweaked key Q = P + k*G with P = pubKey and k = tweak.
+	// We expect funds to arrive at scriptPubKey(Q), so we calculate
+	// the corresponding address.
+	tweakedPubKey := TweakPubKeyWithTweak(pubKey, tweak)
+	walletLog.Infof("Got the following tweaked pubkey: %v",
+		hex.EncodeToString(tweakedPubKey.SerializeCompressed()))
+
+	pubkeyHash := btcutil.Hash160(tweakedPubKey.SerializeCompressed())
+	expectedAddr, err := btcutil.NewAddressWitnessPubKeyHash(pubkeyHash,
+		activeNetParams)
+	if err != nil {
+		return nil, err
+	}
+	walletLog.Infof("Got the following expected Address: %v",
+		expectedAddr.String())
+	expectedKeyScript, err := txscript.PayToAddrScript(expectedAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Sanity check: we check that tweak + ourPrivKey derives
+	// the same address
+	// TODO: Needed, or not?
+	// TODO Don't import math/big for this in wallet
+	// TODO (related to above): switch to existing tweak algo, and
+	// use existing tweak fns (the ones of form H(k||P)*G + P)?
+	tweakInt := new(big.Int).SetBytes(tweak)
+
+	tweakInt = tweakInt.Add(tweakInt, ourPrivKey.D)
+	tweakInt = tweakInt.Mod(tweakInt, btcec.S256().N)
+
+	verifyTweakPriv, verifyTweakPub := btcec.PrivKeyFromBytes(
+		btcec.S256(), tweakInt.Bytes())
+	verifyPubkeyHash := btcutil.Hash160(verifyTweakPub.SerializeCompressed())
+	verifyAddr, err := btcutil.NewAddressWitnessPubKeyHash(
+		verifyPubkeyHash, activeNetParams)
+	if err != nil {
+		return nil, err
+	}
+	if verifyAddr.String() != expectedAddr.String() {
+		return nil, errors.New("We cannot derive the tweaked address")
+	}
+
+	// See note in for loop below for why we store this
+	utxos, err := l.ListUnspentWitness(1)
+	if err != nil {
+		return nil, err
+	}
+
+	// Step 3
+	var payOutFound bool = false
+	var payOutAmount int64
+	for _, txout := range tx.TxOut {
+		if bytes.Equal(txout.PkScript, expectedKeyScript) {
+			payOutFound = true
+			payOutAmount = txout.Value
+			// TODO consider what happens if there's more than one output
+			// to this address; superficially, this just means we got more
+			// money so we don't care ... but a non-superficial analysis
+			// is preferable.
+			break
+		}
+	}
+	if !payOutFound {
+		return nil, errors.New("payout address not found")
+	}
+	walletLog.Infof("Found a single output to the right address paying: %v",
+		payOutAmount)
+
+	// Iterating over the inputs, find ones we can sign;
+	// do this by iterating over all of our in-wallet utxos
+	// and looking for a match. Retrieve the amount at that utxo
+	// Because this is single-pass and there are no non-standard
+	// sighash flags used in our signatures, there is no security concern
+	// based on inputs we don't recognize as our own; if we haven't signed
+	// something, it won't be broadcast.
+	ourSpentAmts := make(map[int]int64)
+	var totalSpentInJoin int64 = 0
+
+	for i, txin := range tx.TxIn {
+		for _, candidate := range utxos {
+			if candidate.OutPoint.Hash == txin.PreviousOutPoint.Hash &&
+				candidate.OutPoint.Index == txin.PreviousOutPoint.Index {
+				// We need to retrieve the amount for this outpoint,
+				// so we can sanity check the total credit/debit
+				ourSpentAmts[i] = int64(candidate.Value)
+				totalSpentInJoin += ourSpentAmts[i]
+				break
+			}
+		}
+	}
+	walletLog.Infof("The total amount spent is: %v", totalSpentInJoin)
+
+	// Check that the total amount spent is less than that received
+	if payOutAmount < totalSpentInJoin {
+		returnStr := "This join costs us money, refusing. " +
+			fmt.Sprint(payOutAmount) + " received, spent: " +
+			fmt.Sprint(totalSpentInJoin)
+		return []byte(returnStr), nil
+	}
+
+	// At this point we are happy to sign the transaction;
+	// we have a map over all inputs belonging to us (although
+	// it likely contains only 1 kv pair). We iterate over it,
+	// and sign each.
+	for k, v := range ourSpentAmts {
+		keyScript := utxos[k].PkScript
+		// TODO this is a hacky way, works for p2wpkh
+		addr, err := btcutil.NewAddressWitnessPubKeyHash(keyScript[2:],
+			activeNetParams)
+		if err != nil {
+			return nil, err
+		}
+		signingPrivKey, err := l.GetPrivKey(addr)
+		if err != nil {
+			return nil, err
+		}
+		signingPubKey := signingPrivKey.PubKey()
+		signingTxOut := &wire.TxOut{
+			Value:    v,
+			PkScript: keyScript,
+		}
+		// Populate the sign descriptor which we'll use to
+		// generate the signature.
+		signDesc := &SignDescriptor{
+			KeyDesc: keychain.KeyDescriptor{
+				PubKey: signingPubKey,
+			},
+			WitnessScript: keyScript,
+			Output:        signingTxOut,
+			HashType:      txscript.SigHashAll,
+			SigHashes:     txscript.NewTxSigHashes(tx),
+			InputIndex:    k,
+		}
+		spendSig, err := l.Cfg.Signer.SignOutputRaw(tx, signDesc)
+		if err != nil {
+			return nil, err
+		}
+
+		//Construct the witness for this input
+		witness := make([][]byte, 2)
+		witness[0] = append(spendSig, byte(txscript.SigHashAll))
+		witness[1] = signingPubKey.SerializeCompressed()
+		tx.TxIn[k].Witness = witness
+		// Attempt to validate the completed transaction. This
+		// should succeed if the wallet was able to properly generate
+		// the proper private key.
+		vm, err := txscript.NewEngine(keyScript,
+			tx, k, txscript.StandardVerifyFlags, nil,
+			nil, v)
+		if err != nil {
+			return nil, err
+		}
+		if err := vm.Execute(); err != nil {
+			return nil, err
+		}
+	}
+
+	var finalTxnBuf bytes.Buffer
+	if err := tx.Serialize(&finalTxnBuf); err != nil {
+		return nil, err
+	}
+
+	return finalTxnBuf.Bytes(), nil
 }
 
 // Startup establishes a connection to the RPC source, and spins up all

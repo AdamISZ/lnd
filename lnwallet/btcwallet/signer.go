@@ -184,7 +184,7 @@ func (b *BtcWallet) SignOutputRaw(tx *wire.MsgTx,
 	return sig[:len(sig)-1], nil
 }
 
-// ComputeInputScript generates a complete InputIndex for the passed
+// ComputeInputScript generates a complete InputScript for the passed
 // transaction with the signature as defined within the passed SignDescriptor.
 // This method is capable of generating the proper input script for both
 // regular p2wkh output and p2wkh outputs nested within a regular p2sh output.

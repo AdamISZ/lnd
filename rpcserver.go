@@ -153,6 +153,10 @@ var (
 			Entity: "onchain",
 			Action: "write",
 		}},
+		"/lnrpc.Lightning/CoinJoin": {{
+			Entity: "onchain",
+			Action: "write",
+		}},
 		"/lnrpc.Lightning/SendMany": {{
 			Entity: "onchain",
 			Action: "write",
@@ -483,6 +487,59 @@ func (r *rpcServer) SendCoins(ctx context.Context,
 	rpcsLog.Infof("[sendcoins] spend generated txid: %v", txid.String())
 
 	return &lnrpc.SendCoinsResponse{Txid: txid.String()}, nil
+}
+
+// Accepts a PSBT as input along with a pubkey and a tweak,
+// and signs recognized inputs, returning a fully signed transaction
+// to the caller
+func (r *rpcServer) CoinJoin(ctx context.Context,
+	in *lnrpc.CoinJoinRequest) (*lnrpc.CoinJoinResponse, error) {
+
+	// TODO: currently in PSBT is just a serialized tx;
+	// change this to BIP174 for compatibility.
+	// Read in and sanity check the serialized tx
+	tx := wire.MsgTx{Version: 2}
+	txhex, err := hex.DecodeString(in.Psbt)
+	if err != nil {
+		return nil, err
+	}
+	err = tx.Deserialize(bytes.NewReader(txhex))
+	if err != nil {
+		return nil, err
+	}
+
+	// read in the public key that was found to be used
+	// for constructing the transaction
+	hexPk, err := hex.DecodeString(in.Pubkey)
+	if err != nil {
+		return nil, err
+	}
+	pubKey, err := btcec.ParsePubKey(hexPk, btcec.S256())
+	if err != nil {
+		return nil, err
+	}
+
+	// read in the tweak used to construct the destination
+	// address
+	tweak, err := hex.DecodeString(in.Tweak)
+	if err != nil {
+		return nil, err
+	}
+
+	// TODO the tweak is privkey material (theoretically),
+	// so remove from logging I guess? (but here passed on
+	// the command line; not sure; it's not dangerous on its own).
+	rpcsLog.Infof("[coinjoin] tx=%v, pub=%v, tweak=%v",
+		txhex, pubKey, tweak)
+	fulltx, err := r.server.cc.wallet.CoinJoin(&tx, pubKey,
+		tweak, activeNetParams.Params)
+	if err != nil {
+		return nil, err
+	}
+
+	rpcsLog.Infof("[coinjoin] generated fulltx: %v", fulltx)
+
+	return &lnrpc.CoinJoinResponse{FullSignedTx: hex.EncodeToString(fulltx[:])}, nil
 }
 
 // SendMany handles a request for a transaction create multiple specified

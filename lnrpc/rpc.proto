@@ -231,6 +231,20 @@ service Lightning {
         };
     }
 
+	/** lncli: `coinjoin`
+	CoinJoin executes a request to co-sign an existing serialized but only
+	partially signed transaction.
+	The server will sign each input that it recognizes it owns, assuming that
+	it recognizes that it receives as many coins as it spends.
+	The server will optionally broadcast the transaction also.
+	*/
+	rpc CoinJoin(CoinJoinRequest) returns (CoinJoinResponse) {
+		option (google.api.http) = {
+			post: "/v1/psbt"
+			body: "*"
+		};
+	}
+
     /**
     SubscribeTransactions creates a uni-directional stream from the server to
     the client in which any newly discovered transactions relevant to the
@@ -795,6 +809,23 @@ message SendCoinsRequest {
 message SendCoinsResponse {
     /// The transaction ID of the transaction
     string txid = 1 [json_name = "txid"];
+}
+
+message CoinJoinRequest {
+	/// The partially signed bitcoin transaction serialized in hex
+	string psbt = 1;
+
+	/// The hexlified tweak to construct our destination
+	string tweak = 2;
+
+	/// The pubkey used to construct our destination
+	string pubkey = 3;
+	
+}
+
+message CoinJoinResponse {
+	/// The fully signed bitcoin transaction
+	string full_signed_tx = 1 [json_name = "full_signed_tx"];
 }
 
 /** 
