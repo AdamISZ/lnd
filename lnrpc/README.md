@@ -32,6 +32,9 @@ description):
   * CoinJoin
      * Completes signing of a partially signed transaction and optionally
 	   broadcasts.
+  * DecodePsbt
+     * Decodes a base64 encoded Partially Signed Bitcoin Transaction in
+	   human-readable form.
   * SubscribeTransactions
      * Returns a stream which sends async notifications each time a transaction
        is created or one is received that pays to us.

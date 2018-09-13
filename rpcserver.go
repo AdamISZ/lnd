@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/AdamISZ/btcutil/psbt"
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -156,6 +158,10 @@ var (
 		"/lnrpc.Lightning/CoinJoin": {{
 			Entity: "onchain",
 			Action: "write",
+		}},
+		"/lnrpc.Lightning/DecodePsbt": {{
+			Entity: "onchain",
+			Action: "read",
 		}},
 		"/lnrpc.Lightning/SendMany": {{
 			Entity: "onchain",
@@ -489,24 +495,153 @@ func (r *rpcServer) SendCoins(ctx context.Context,
 	return &lnrpc.SendCoinsResponse{Txid: txid.String()}, nil
 }
 
+// DecodePSBT converts a base64 encoding of a Partially Signed Bitcoin
+// Transaction into a human readable data-set for the client.
+func (r *rpcServer) DecodePSBT(ctx context.Context,
+	in *lnrpc.DecodePSBTRequest) (*lnrpc.DecodePSBTResponse, error) {
+	// The request is a base64 encoded PSBT serialization;
+	// convert it into a Psbt object
+	p, err := psbt.NewPsbt([]byte(in.B64Psbt), true)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create message for unsigned transaction
+	uTx := bytes.NewBuffer(make([]byte, 0,
+		p.UnsignedTx.SerializeSize()))
+	err = p.UnsignedTx.Serialize(uTx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Construct message for global unknowns
+	globalUnknowns := make([]*lnrpc.PUnknown, 0, len(p.Unknowns))
+	for _, u := range p.Unknowns {
+		globalUnknowns = append(globalUnknowns,
+			&lnrpc.PUnknown{Key: hex.EncodeToString(u.Key),
+				Value: hex.EncodeToString(u.Value)})
+	}
+
+	// Construct message for inputs
+	inputs := make([]*lnrpc.PInput, 0, len(p.UnsignedTx.TxIn))
+	for _, pi := range p.Inputs {
+		pin := lnrpc.PInput{}
+		if pi.WitnessUtxo != nil {
+			_, addresses, _, err := txscript.ExtractPkScriptAddrs(
+				pi.WitnessUtxo.PkScript, activeNetParams.Params)
+			if err != nil {
+				return nil, err
+			}
+			if len(addresses) != 1 {
+				return nil, errors.New("in-wallet utxos must not be multisig")
+			}
+			pin.WitnessUtxo = &lnrpc.PWitnessUtxo{
+				Amount:       pi.WitnessUtxo.Value,
+				ScriptPubKey: hex.EncodeToString(pi.WitnessUtxo.PkScript),
+				Address:      addresses[0].String(),
+			}
+		}
+
+		if pi.NonWitnessUtxo != nil {
+			pin.NonWitnessUtxo = pi.NonWitnessUtxo.TxHash().String()
+		}
+
+		pin.SigHashType = int32(pi.SighashType)
+
+		// construct the (sub)-message list of partial sigs
+		pSigs := make([]*lnrpc.PPartialSig, 0, len(pi.PartialSigs))
+		for _, ps := range pi.PartialSigs {
+			pSigs = append(pSigs, &lnrpc.PPartialSig{
+				PubKey:    hex.EncodeToString(ps.PubKey),
+				Signature: hex.EncodeToString(ps.Signature)})
+		}
+		pin.PPartialSigs = pSigs
+
+		if pi.RedeemScript != nil {
+			pin.RedeemScript = hex.EncodeToString(pi.RedeemScript)
+		}
+
+		if pi.WitnessScript != nil {
+			pin.WitnessScript = hex.EncodeToString(pi.WitnessScript)
+		}
+
+		// construct the (sub)-message list of BIP32 derivations
+		pB32Derivs := make([]*lnrpc.PBIP32Derivation, 0,
+			len(pi.Bip32Derivation))
+		for _, pb := range pi.Bip32Derivation {
+			// Prepare the byte encoding of the master fingerprint
+			var mkf [4]byte
+			binary.LittleEndian.PutUint32(mkf[:], pb.MasterKeyFingerprint)
+			pB32Derivs = append(pB32Derivs, &lnrpc.PBIP32Derivation{
+				MasterKeyFingerprint: hex.EncodeToString(mkf[:]),
+				Path:                 pb.Bip32Path,
+				PubKey:               hex.EncodeToString(pb.PubKey)})
+		}
+		pin.PBIP32Derivations = pB32Derivs
+
+		if pi.FinalScriptSig != nil {
+			pin.FinalScriptSig = hex.EncodeToString(pi.FinalScriptSig)
+		}
+
+		if pi.FinalScriptWitness != nil {
+			pin.FinalScriptWitness = hex.EncodeToString(pi.FinalScriptWitness)
+		}
+
+		// Construct the (sub)-message for unknowns
+		inputUnknowns := make([]*lnrpc.PUnknown, 0, len(pi.Unknowns))
+		for _, u := range pi.Unknowns {
+			inputUnknowns = append(inputUnknowns,
+				&lnrpc.PUnknown{Key: hex.EncodeToString(u.Key),
+					Value: hex.EncodeToString(u.Value)})
+		}
+		pin.PUnknowns = inputUnknowns
+
+		inputs = append(inputs, &pin)
+	}
+
+	// Construct message for outputs
+	outputs := make([]*lnrpc.POutput, 0, len(p.UnsignedTx.TxOut))
+	for _, po := range p.Outputs {
+		pout := lnrpc.POutput{}
+
+		if po.RedeemScript != nil {
+			pout.RedeemScript = hex.EncodeToString(po.RedeemScript)
+		}
+
+		if po.WitnessScript != nil {
+			pout.WitnessScript = hex.EncodeToString(po.WitnessScript)
+		}
+
+		// construct the (sub)-message list of BIP32 derivations
+		pB32Derivs := make([]*lnrpc.PBIP32Derivation, 0,
+			len(po.Bip32Derivation))
+		for _, pb := range po.Bip32Derivation {
+			// Prepare the byte encoding of the master fingerprint
+			var mkf [4]byte
+			binary.LittleEndian.PutUint32(mkf[:], pb.MasterKeyFingerprint)
+			pB32Derivs = append(pB32Derivs, &lnrpc.PBIP32Derivation{
+				MasterKeyFingerprint: hex.EncodeToString(mkf[:]),
+				Path:                 pb.Bip32Path,
+				PubKey:               hex.EncodeToString(pb.PubKey)})
+		}
+		pout.PBIP32Derivations = pB32Derivs
+
+		outputs = append(outputs, &pout)
+	}
+
+	return &lnrpc.DecodePSBTResponse{
+		PUnsignedTx: uTx.String(),
+		PUnknowns:   globalUnknowns,
+		PInputs:     inputs,
+		POutputs:    outputs,
+	}, nil
+}
+
 // Accepts a PSBT as input along with a pubkey and a tweak,
 // and signs recognized inputs, returning a fully signed transaction
 // to the caller
 func (r *rpcServer) CoinJoin(ctx context.Context,
 	in *lnrpc.CoinJoinRequest) (*lnrpc.CoinJoinResponse, error) {
-
-	// TODO: currently in PSBT is just a serialized tx;
-	// change this to BIP174 for compatibility.
-	// Read in and sanity check the serialized tx
-	tx := wire.MsgTx{Version: 2}
-	txhex, err := hex.DecodeString(in.Psbt)
-	if err != nil {
-		return nil, err
-	}
-	err = tx.Deserialize(bytes.NewReader(txhex))
-	if err != nil {
-		return nil, err
-	}
 
 	// read in the public key that was found to be used
 	// for constructing the transaction
@@ -529,9 +664,9 @@ func (r *rpcServer) CoinJoin(ctx context.Context,
 	// TODO the tweak is privkey material (theoretically),
 	// so remove from logging I guess? (but here passed on
 	// the command line; not sure; it's not dangerous on its own).
-	rpcsLog.Infof("[coinjoin] tx=%v, pub=%v, tweak=%v",
-		txhex, pubKey, tweak)
-	fulltx, err := r.server.cc.wallet.CoinJoin(&tx, pubKey,
+	//rpcsLog.Infof("[coinjoin] tx=%v, pub=%v, tweak=%v",
+	//	txhex, pubKey, tweak)
+	fulltx, err := r.server.cc.wallet.CoinJoin(in.Psbt, pubKey,
 		tweak, activeNetParams.Params)
 	if err != nil {
 		return nil, err
@@ -539,7 +674,8 @@ func (r *rpcServer) CoinJoin(ctx context.Context,
 
 	rpcsLog.Infof("[coinjoin] generated fulltx: %v", fulltx)
 
-	return &lnrpc.CoinJoinResponse{FullSignedTx: hex.EncodeToString(fulltx[:])}, nil
+	return &lnrpc.CoinJoinResponse{
+		FullSignedTx: hex.EncodeToString(fulltx[:])}, nil
 }
 
 // SendMany handles a request for a transaction create multiple specified

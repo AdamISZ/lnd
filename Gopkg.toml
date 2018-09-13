@@ -63,8 +63,8 @@
   revision = "29b680b06c82d044ebea91bf3069038eb562df2a"
 
 [[constraint]]
-  name = "github.com/btcsuite/btcutil"
-  revision = "ab6388e0c60ae4834a1f57511e20c17b5f78be4b"
+  name = "github.com/AdamISZ/btcutil"
+  revision = "110f4d9088a1ed8e747edd640aaf223c8a18a0c8"
 
 [[constraint]]
   name = "github.com/btcsuite/btcd"

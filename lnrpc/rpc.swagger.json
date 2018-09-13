@@ -339,6 +339,33 @@
         ]
       }
     },
+    "/v1/decodepsbt": {
+      "post": {
+        "summary": "* lncli: `decodepsbt`\nDecodePSBT executes a request to decode a Partially Signed Bitcoin\nTransaction into a human readable form. The PSBT should be provided\nin base64 encoding.",
+        "operationId": "DecodePSBT",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/lnrpcDecodePSBTResponse"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/lnrpcDecodePSBTRequest"
+            }
+          }
+        ],
+        "tags": [
+          "Lightning"
+        ]
+      }
+    },
     "/v1/fees": {
       "get": {
         "summary": "* lncli: `feereport`\nFeeReport allows the caller to obtain a report detailing the current fee\nschedule enforced by the node globally for each channel.",
@@ -1603,6 +1630,46 @@
         }
       }
     },
+    "lnrpcDecodePSBTRequest": {
+      "type": "object",
+      "properties": {
+        "b64psbt": {
+          "type": "string",
+          "title": "/ The base64 encoded PSBT object"
+        }
+      }
+    },
+    "lnrpcDecodePSBTResponse": {
+      "type": "object",
+      "properties": {
+        "PUnsignedTx": {
+          "type": "string",
+          "title": "/ The unsigned transaction"
+        },
+        "pUnknowns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/lnrpcPUnknown"
+          },
+          "title": "The list of unknown global entries"
+        },
+        "pInputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/lnrpcPInput"
+          },
+          "title": "/ The list of PSBT inputs"
+        },
+        "pOutputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/lnrpcPOutput"
+          },
+          "title": "/ The list of PSBT outputs"
+        }
+      },
+      "description": "*\n`DecodePSBTResponse` must encapsulate all the data in a Partially\nSigned Bitcoin Transaction in a protobuf format."
+    },
     "lnrpcDeleteAllPaymentsResponse": {
       "type": "object"
     },
@@ -2330,6 +2397,146 @@
         },
         "chan_open": {
           "$ref": "#/definitions/lnrpcChannelOpenUpdate"
+        }
+      }
+    },
+    "lnrpcPBIP32Derivation": {
+      "type": "object",
+      "properties": {
+        "masterKeyFingerprint": {
+          "type": "string",
+          "title": "/ The master key fingerprint, hex encoded"
+        },
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": "/ The derivation path as a list of integers"
+        },
+        "pubKey": {
+          "type": "string",
+          "title": "/ The pubkey, hex encoded"
+        }
+      }
+    },
+    "lnrpcPInput": {
+      "type": "object",
+      "properties": {
+        "witnessUtxo": {
+          "$ref": "#/definitions/lnrpcPWitnessUtxo",
+          "title": "/ The witnessUtxo field in the PSBT input"
+        },
+        "nonWitnessUtxo": {
+          "type": "string",
+          "title": "/ The nonwitnessUtxo field in the PSBT input;\n/ here hex-encoded and serialized for compactness"
+        },
+        "sigHashType": {
+          "type": "integer",
+          "format": "int32",
+          "title": "/ The sighash type"
+        },
+        "pPartialSigs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/lnrpcPPartialSig"
+          },
+          "title": "/ The partial signatures, if any"
+        },
+        "redeemScript": {
+          "type": "string",
+          "title": "/ The redeemScript, if any, hex encoded"
+        },
+        "witnessScript": {
+          "type": "string",
+          "title": "/ The witnessScript, if any, hex encoded"
+        },
+        "pBIP32Derivations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/lnrpcPBIP32Derivation"
+          },
+          "title": "/ The BIP32 derivations attached to this input"
+        },
+        "finalScriptSig": {
+          "type": "string",
+          "title": "/ The finalScriptSig for this input, if any, hex encoded"
+        },
+        "finalScriptWitness": {
+          "type": "string",
+          "title": "/ The finalScriptWitness for this input, if any, hex encoded"
+        },
+        "pUnknowns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/lnrpcPUnknown"
+          },
+          "title": "/ Any unknown fields"
+        }
+      }
+    },
+    "lnrpcPOutput": {
+      "type": "object",
+      "properties": {
+        "redeemScript": {
+          "type": "string",
+          "title": "/ The redeemScript, if any"
+        },
+        "witnessScript": {
+          "type": "string",
+          "title": "/ The witnessScript, if any"
+        },
+        "pBIP32Derivations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/lnrpcPBIP32Derivation"
+          },
+          "title": "/ The BIP32 derivations attached to this output"
+        }
+      }
+    },
+    "lnrpcPPartialSig": {
+      "type": "object",
+      "properties": {
+        "pubKey": {
+          "type": "string",
+          "title": "/ The pubkey for the signature, hex encoded"
+        },
+        "signature": {
+          "type": "string",
+          "title": "/ The signature, hex encoded"
+        }
+      }
+    },
+    "lnrpcPUnknown": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "title": "/ The key in the PSBT key-value pair, hex encoded"
+        },
+        "value": {
+          "type": "string",
+          "title": "/ The value in the PSBT key-value pair, hex encoded"
+        }
+      }
+    },
+    "lnrpcPWitnessUtxo": {
+      "type": "object",
+      "properties": {
+        "amount": {
+          "type": "string",
+          "format": "int64",
+          "title": "/ The amount of the output"
+        },
+        "scriptPubKey": {
+          "type": "string",
+          "title": "/ The scriptPubkey of the output, hex encoded"
+        },
+        "address": {
+          "type": "string",
+          "title": "/ The address of the output"
         }
       }
     },

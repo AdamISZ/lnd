@@ -257,6 +257,7 @@ func main() {
 		sendManyCommand,
 		sendCoinsCommand,
 		coinJoinCommand,
+		decodePsbtCommand,
 		connectCommand,
 		disconnectCommand,
 		openChannelCommand,

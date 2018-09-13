@@ -102,6 +102,35 @@ func actionDecorator(f func(*cli.Context) error) func(*cli.Context) error {
 	}
 }
 
+var decodePsbtCommand = cli.Command{
+	Name:      "decodepsbt",
+	Category:  "Wallet",
+	Usage:     "Decode a PSBT",
+	ArgsUsage: "psbt",
+	Description: `
+	Pass a base64 encoded string as the PSBT (Partially Signed
+	Bitcoin Transaction as per BIP174).`,
+	Action: actionDecorator(decodePsbt),
+}
+
+func decodePsbt(ctx *cli.Context) error {
+	client, cleanUp := getClient(ctx)
+	defer cleanUp()
+
+	psbt := ctx.Args().First()
+
+	ctxb := context.Background()
+	psbtResp, err := client.DecodePSBT(ctxb, &lnrpc.DecodePSBTRequest{
+		B64Psbt: psbt,
+	})
+	if err != nil {
+		return err
+	}
+
+	printRespJSON(psbtResp)
+	return nil
+}
+
 var newAddressCommand = cli.Command{
 	Name:      "newaddress",
 	Category:  "Wallet",

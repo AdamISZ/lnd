@@ -245,6 +245,18 @@ service Lightning {
 		};
 	}
 
+	/** lncli: `decodepsbt`
+	DecodePSBT executes a request to decode a Partially Signed Bitcoin
+	Transaction into a human readable form. The PSBT should be provided
+	in base64 encoding.
+	*/
+	rpc DecodePSBT(DecodePSBTRequest) returns (DecodePSBTResponse) {
+		option (google.api.http) = {
+			post: "/v1/decodepsbt"
+			body: "*"
+		};
+	}
+
     /**
     SubscribeTransactions creates a uni-directional stream from the server to
     the client in which any newly discovered transactions relevant to the
@@ -826,6 +838,118 @@ message CoinJoinRequest {
 message CoinJoinResponse {
 	/// The fully signed bitcoin transaction
 	string full_signed_tx = 1 [json_name = "full_signed_tx"];
+}
+
+message DecodePSBTRequest {
+	/// The base64 encoded PSBT object
+	string b64psbt = 1;
+
+}
+
+/**
+`DecodePSBTResponse` must encapsulate all the data in a Partially
+Signed Bitcoin Transaction in a protobuf format.
+*/
+message DecodePSBTResponse {
+	/// The unsigned transaction
+	string PUnsignedTx = 1;
+
+	// The list of unknown global entries
+	repeated PUnknown  pUnknowns = 2;
+
+	/// The list of PSBT inputs
+	repeated PInput pInputs = 3;
+
+	/// The list of PSBT outputs
+	repeated POutput pOutputs = 4;
+
+}
+
+message PUnknown {
+	/// The key in the PSBT key-value pair, hex encoded
+	string key = 1;
+
+	/// The value in the PSBT key-value pair, hex encoded
+	string value = 2;
+}
+
+message PInput {
+	/// The witnessUtxo field in the PSBT input
+	PWitnessUtxo witnessUtxo = 1;
+
+	/// The nonwitnessUtxo field in the PSBT input;
+	/// here hex-encoded and serialized for compactness
+	string nonWitnessUtxo = 2;
+
+	/// The sighash type
+	int32 sigHashType = 3;
+
+	/// The partial signatures, if any
+	repeated PPartialSig  pPartialSigs = 4;
+
+	/// The redeemScript, if any, hex encoded
+	string redeemScript = 5;
+
+	/// The witnessScript, if any, hex encoded
+	string witnessScript = 6;
+
+	/// The BIP32 derivations attached to this input
+	repeated PBIP32Derivation  pBIP32Derivations = 7;
+
+	/// The finalScriptSig for this input, if any, hex encoded
+	string finalScriptSig = 8;
+
+	/// The finalScriptWitness for this input, if any, hex encoded
+	string finalScriptWitness = 9;
+
+	/// Any unknown fields
+	repeated PUnknown pUnknowns = 10;
+
+}
+
+message POutput {
+	/// The redeemScript, if any
+	string redeemScript = 1;
+
+	/// The witnessScript, if any
+	string witnessScript = 2;
+
+	/// The BIP32 derivations attached to this output
+	repeated PBIP32Derivation pBIP32Derivations = 3;
+
+}
+
+message PWitnessUtxo {
+	/// The amount of the output
+	int64 amount = 1;
+
+	/// The scriptPubkey of the output, hex encoded
+	string scriptPubKey = 2;
+
+	/// The address of the output
+	string address = 3;
+
+}
+
+message PPartialSig {
+	/// The pubkey for the signature, hex encoded
+	string pubKey = 1;
+
+	/// The signature, hex encoded
+	string signature = 2;
+
+}
+
+message PBIP32Derivation {
+	/// The master key fingerprint, hex encoded
+	string masterKeyFingerprint = 1;
+
+	/// The derivation path as a list of integers
+	repeated uint32 path = 2;
+	
+	/// The pubkey, hex encoded
+	string pubKey = 3;
+
 }
 
 /** 
