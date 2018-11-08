@@ -15,6 +15,13 @@
   revision = "c0276d75487ef7aceab140c9eb31601dd7d18bd4"
 
 [[projects]]
+  digest = "1:aaaaacd72ab4c8f9fce441446cb9afd2e67370e87035c86cd2216ad8f7ee68b9"
+  name = "github.com/AdamISZ/btcutil"
+  packages = ["psbt"]
+  pruneopts = "UT"
+  revision = "110f4d9088a1ed8e747edd640aaf223c8a18a0c8"
+
+[[projects]]
   branch = "master"
   digest = "1:9a112e9f617878a9a643fdfcb7c31afaf0cf8859b8c179bf6bf53f9f881be695"
   name = "github.com/NebulousLabs/fastrand"
@@ -499,6 +506,7 @@
   analyzer-name = "dep"
   analyzer-version = 1
   input-imports = [
+    "github.com/AdamISZ/btcutil/psbt",
     "github.com/NebulousLabs/go-upnp",
     "github.com/Yawning/aez",
     "github.com/btcsuite/btcd/blockchain",
