@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcutil"
 )
 
 const (
@@ -152,6 +153,11 @@ type KeyRing interface {
 	// or when manually rotating something like our current default node
 	// key.
 	DeriveKey(keyLoc KeyLocator) (KeyDescriptor, error)
+
+	// KeyForAddress attempts to extract the raw public key and HD path
+	// a given witness address, assuming it is of type witness pubkey
+	// hash (nested or not), i.e. is an in wallet funds address.
+	KeyForAddress(addr btcutil.Address) (KeyDescriptor, error)
 }
 
 // SecretKeyRing is a similar to the regular KeyRing interface, but it is also

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcwallet/waddrmgr"
 	"github.com/btcsuite/btcwallet/wallet"
 	"github.com/btcsuite/btcwallet/walletdb"
@@ -238,6 +239,29 @@ func (b *BtcWalletKeyRing) DeriveKey(keyLoc KeyLocator) (KeyDescriptor, error) {
 	})
 	if err != nil {
 		return keyDesc, err
+	}
+
+	return keyDesc, nil
+}
+
+// KeyForAddress attempts to extract the raw public key and HD path
+// a given witness address, assuming it is of type witness pubkey
+// hash (nested or not), i.e. is an in wallet funds address.
+//
+// NOTE: This is part of the keychain.KeyRing interface.
+func (b *BtcWalletKeyRing) KeyForAddress(addr btcutil.Address) (KeyDescriptor, error) {
+	var keyDesc KeyDescriptor
+
+	pubKey, err := b.wallet.PubKeyForAddress(addr)
+	if err != nil {
+		return keyDesc, err
+	}
+
+	// A non-error return implies that the address is owned by the wallet
+	// and connected with a single pubKey. We can build a keydescriptor
+	// from this.
+	keyDesc = KeyDescriptor{
+		PubKey: pubKey,
 	}
 
 	return keyDesc, nil
